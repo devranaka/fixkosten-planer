@@ -143,6 +143,7 @@ export default function App() {
   const [form, setForm]         = useState({ name:"", amount:"", frequency:"yearly", months:[0], category:"Versicherung", customLabel:"" });
   const [editId, setEditId]     = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
+  const [calYear, setCalYear] = useState(currentYear);
   const [exported, setExported] = useState(false);
 
   useEffect(() => {
@@ -348,27 +349,40 @@ export default function App() {
         )}
 
         {/* CALENDAR */}
-        {view==="calendar" && (
+        {view==="calendar" && (()=>{
+          const yearRange = [currentYear, currentYear+1, currentYear+2];
+          return (
           <div>
-            <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",letterSpacing:2,textTransform:"uppercase",marginBottom:14}}>Jahresübersicht {currentYear}</div>
+            {/* Jahr-Auswahl */}
+            <div style={{display:"flex",gap:8,marginBottom:16}}>
+              {yearRange.map(y=>(
+                <button key={y} onClick={()=>{setCalYear(y);setSelectedMonth(null);}} style={{flex:1,padding:"9px",borderRadius:10,cursor:"pointer",background:calYear===y?"#ede9fe":"#fff",border:`1.5px solid ${calYear===y?"#7c3aed":"#e5e7eb"}`,color:calYear===y?"#7c3aed":"#6b7280",fontWeight:calYear===y?800:500,fontSize:14}}>{y}</button>
+              ))}
+            </div>
+            <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",letterSpacing:2,textTransform:"uppercase",marginBottom:14}}>Jahresübersicht {calYear}</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
               {MONTHS.map((m,i)=>{
-                const items=monthlyBreakdown[i];const total=monthlyTotals[i];const isCurrent=i===currentMonth;const isPast=i<currentMonth;
-                return (<div key={i} onClick={()=>setSelectedMonth(selectedMonth===i?null:i)} style={{background:isCurrent?"#faf5ff":selectedMonth===i?"#f9fafb":"#fff",border:`1.5px solid ${isCurrent?"#a78bfa":selectedMonth===i?"#d1d5db":"#e5e7eb"}`,borderRadius:12,padding:"13px",cursor:"pointer"}}>
+                const items=monthlyBreakdown[i];
+                const total=monthlyTotals[i];
+                const isCurrent=i===currentMonth && calYear===currentYear;
+                const isPast=(calYear<currentYear)||(calYear===currentYear && i<currentMonth);
+                const selKey=`${calYear}-${i}`;
+                return (<div key={i} onClick={()=>setSelectedMonth(selectedMonth===selKey?null:selKey)} style={{background:isCurrent?"#faf5ff":selectedMonth===selKey?"#f9fafb":"#fff",border:`1.5px solid ${isCurrent?"#a78bfa":selectedMonth===selKey?"#d1d5db":"#e5e7eb"}`,borderRadius:12,padding:"13px",cursor:"pointer"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                     <div style={{fontSize:13,fontWeight:isCurrent?800:600,color:isCurrent?"#7c3aed":isPast?"#d1d5db":"#374151"}}>{m}{isCurrent&&<span style={{marginLeft:5,fontSize:9,background:"#7c3aed",color:"#fff",borderRadius:4,padding:"1px 5px"}}>JETZT</span>}</div>
                     {total>0&&<div style={{fontSize:13,fontWeight:800,color:isPast?"#d1d5db":isCurrent?"#7c3aed":"#ef4444"}}>€{fmt(total)}</div>}
                   </div>
                   <div style={{height:5,background:"#f3f4f6",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",borderRadius:3,width:`${(total/maxMonthly)*100}%`,background:isPast?"#e5e7eb":isCurrent?"linear-gradient(90deg,#7c3aed,#a855f7)":"linear-gradient(90deg,#f59e0b,#ef4444)"}}/></div>
-                  {selectedMonth===i&&items.length>0&&<div style={{marginTop:10,borderTop:"1px solid #f3f4f6",paddingTop:8}}>{items.map((c,j)=>{const cat=getCat(c.category);const name=c.category==="Sonstiges"&&c.customLabel?c.customLabel:c.name;return(<div key={j} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span style={{color:"#6b7280"}}>{cat.emoji} {name}</span><span style={{fontWeight:700,color:cat.color}}>€{fmt(c.amount)}</span></div>);})}</div>}
+                  {selectedMonth===selKey&&items.length>0&&<div style={{marginTop:10,borderTop:"1px solid #f3f4f6",paddingTop:8}}>{items.map((c,j)=>{const cat=getCat(c.category);const name=c.category==="Sonstiges"&&c.customLabel?c.customLabel:c.name;return(<div key={j} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}><span style={{color:"#6b7280"}}>{cat.emoji} {name}</span><span style={{fontWeight:700,color:cat.color}}>€{fmt(c.amount)}</span></div>);})}</div>}
                   {total===0&&<div style={{fontSize:11,color:"#e5e7eb",marginTop:4}}>Keine Kosten</div>}
                 </div>);
               })}
             </div>
-            <button onClick={handleExport} style={{width:"100%",marginBottom:12,background:exported?"#059669":"linear-gradient(135deg,#7c3aed,#a855f7)",border:"none",borderRadius:13,padding:"14px",color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer"}}>{exported?"✅ Heruntergeladen!":"📅 Als Kalender exportieren (.ics)"}</button>
+            <button onClick={()=>{downloadICS(costs,calYear);setExported(true);setTimeout(()=>setExported(false),3000);}} style={{width:"100%",marginBottom:12,background:exported?"#059669":"linear-gradient(135deg,#7c3aed,#a855f7)",border:"none",borderRadius:13,padding:"14px",color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer"}}>{exported?"✅ Heruntergeladen!":`📅 Kalender ${calYear} exportieren (.ics)`}</button>
             <div style={{background:"#f0fdf4",border:"1.5px solid #bbf7d0",borderRadius:13,padding:"16px"}}><div style={{fontSize:13,fontWeight:700,color:"#059669",marginBottom:5}}>💡 Puffer-Strategie</div><div style={{fontSize:13,color:"#065f46",lineHeight:1.6}}>Lege jeden Monat <strong>€{monthlyBuffer.toFixed(2)}</strong> zurück.</div></div>
           </div>
-        )}
+          );
+        })()}
 
         {/* ADD / EDIT */}
         {view==="add" && (
