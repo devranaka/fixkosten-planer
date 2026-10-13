@@ -159,13 +159,13 @@ export default function App() {
   }, [costs]);
 
   const monthlyTotals = monthlyBreakdown.map(items => items.reduce((s,c)=>s+c.amount,0));
-  const totalAnnual = useMemo(() => costs.reduce((sum,c) => {
-    if (c.frequency==="monthly")    return sum+c.amount*12;
-    if (c.frequency==="quarterly")  return sum+c.amount*4;
-    if (c.frequency==="halfyearly") return sum+c.amount*2;
-    return sum+c.amount;
-  }, 0), [costs]);
-  const monthlyBuffer = totalAnnual/12;
+  const breakdown = useMemo(() => {
+    const b = { monthly:0, quarterly:0, halfyearly:0, yearly:0 };
+    costs.forEach(c => { b[c.frequency] = (b[c.frequency]||0) + c.amount; });
+    return b;
+  }, [costs]);
+  const totalAnnual = breakdown.monthly*12 + breakdown.quarterly*4 + breakdown.halfyearly*2 + breakdown.yearly;
+  const monthlyBuffer = (breakdown.monthly) + (breakdown.quarterly/3) + (breakdown.halfyearly/6) + (breakdown.yearly/12);
 
   const upcoming = useMemo(() => {
     const result = [];
@@ -288,9 +288,35 @@ export default function App() {
               </div>
             )}
 
-            <div style={{background:"#fff",border:"1.5px solid #e5e7eb",borderRadius:14,padding:"16px",marginBottom:20,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-              <div><div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>Gesamt / Jahr</div><div style={{fontSize:26,fontWeight:800,color:"#7c3aed",letterSpacing:"-0.5px"}}>€{fmt(totalAnnual)}</div></div>
-              <div><div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>Monatlich zurücklegen</div><div style={{fontSize:26,fontWeight:800,color:"#059669",letterSpacing:"-0.5px"}}>€{monthlyBuffer.toFixed(2)}</div></div>
+            <div style={{background:"#fff",border:"1.5px solid #e5e7eb",borderRadius:14,padding:"16px",marginBottom:20}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",letterSpacing:2,textTransform:"uppercase",marginBottom:14}}>Monatlicher Puffer-Bedarf</div>
+              {[
+                { freq:"yearly",     label:"Jährliche Kosten",        color:"#7c3aed", bg:"#ede9fe", emoji:"📅", divisor:12 },
+                { freq:"halfyearly", label:"Halbjährliche Kosten",     color:"#0369a1", bg:"#e0f2fe", emoji:"🗓️", divisor:6  },
+                { freq:"quarterly",  label:"Vierteljährliche Kosten",  color:"#b45309", bg:"#fef3c7", emoji:"📆", divisor:3  },
+                { freq:"monthly",    label:"Monatliche Kosten",        color:"#047857", bg:"#d1fae5", emoji:"💳", divisor:1  },
+              ].map(({freq,label,color,bg,emoji,divisor}) => breakdown[freq]>0 && (
+                <div key={freq} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",borderRadius:10,background:bg,marginBottom:8}}>
+                  <div>
+                    <div style={{fontSize:12,color:"#6b7280",marginBottom:2}}>{emoji} {label}</div>
+                    <div style={{fontSize:13,fontWeight:700,color}}>{freq==="monthly"?"Gesamt/Monat":"Gesamt/Periode"}: <span style={{fontWeight:800}}>€{fmt(breakdown[freq])}</span></div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:10,color:"#9ca3af",marginBottom:2}}>zurücklegen/Monat</div>
+                    <div style={{fontSize:18,fontWeight:800,color}}>€{(breakdown[freq]/divisor).toFixed(2)}</div>
+                  </div>
+                </div>
+              ))}
+              <div style={{borderTop:"2px solid #e5e7eb",marginTop:10,paddingTop:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontSize:12,color:"#6b7280",marginBottom:2}}>Gesamte Jahreskosten</div>
+                  <div style={{fontSize:13,fontWeight:700,color:"#374151"}}>€{fmt(totalAnnual)} / Jahr</div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:10,color:"#9ca3af",marginBottom:2}}>Monatliche Gesamtbelastung</div>
+                  <div style={{fontSize:22,fontWeight:800,color:"#7c3aed"}}>€{monthlyBuffer.toFixed(2)}</div>
+                </div>
+              </div>
             </div>
 
             <div style={{background:exported?"#f0fdf4":"linear-gradient(135deg,#ede9fe,#fce7f3)",border:`1.5px solid ${exported?"#bbf7d0":"#c4b5fd"}`,borderRadius:13,padding:"14px 16px",marginBottom:20,display:"flex",alignItems:"center",gap:12}}>
