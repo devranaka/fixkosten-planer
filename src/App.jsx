@@ -1,4 +1,71 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+
+const SUPABASE_URL = "https://jymsxauqoxlsueyvxdxn.supabase.co";
+const SUPABASE_KEY = "sb_publishable_lAsHe2C7eJyTNCCkeo87VQ_rNIEx9Pe";
+
+async function sbFetch(path, options = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    ...options,
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": options.prefer || "return=representation",
+      ...(options.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : [];
+}
+
+async function loadCosts() {
+  return await sbFetch("/fixkosten?select=*&order=created_at.asc");
+}
+
+async function insertCost(entry) {
+  const row = {
+    name: entry.name,
+    amount: entry.amount,
+    frequency: entry.frequency,
+    months: entry.months,
+    category: entry.category,
+    custom_label: entry.customLabel || "",
+  };
+  const result = await sbFetch("/fixkosten", { method: "POST", body: JSON.stringify(row) });
+  return Array.isArray(result) ? result[0] : result;
+}
+
+async function updateCost(id, entry) {
+  const row = {
+    name: entry.name,
+    amount: entry.amount,
+    frequency: entry.frequency,
+    months: entry.months,
+    category: entry.category,
+    custom_label: entry.customLabel || "",
+  };
+  await sbFetch(`/fixkosten?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(row), prefer: "return=minimal" });
+}
+
+async function deleteCost(id) {
+  await sbFetch(`/fixkosten?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" });
+}
+
+function dbToLocal(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    amount: parseFloat(row.amount),
+    frequency: row.frequency,
+    months: row.months || [],
+    category: row.category,
+    customLabel: row.custom_label || "",
+  };
+}
 
 const MONTHS = ["Jan","Feb","Mär","Apr","Mai","Jun","Jul","Aug","Sep","Okt","Nov","Dez"];
 const MONTH_FULL = ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
@@ -18,15 +85,7 @@ const CATEGORIES = [
   { key: "Sonstiges",   emoji: "✏️", color: "#be185d", bg: "#fce7f3" },
 ];
 
-function getCat(key) {
-  return CATEGORIES.find(c => c.key === key) || CATEGORIES[4];
-}
-
-const DEFAULT_COSTS = [
-  { id: 1, name: "Kfz-Versicherung", amount: 480, frequency: "yearly", months: [6], category: "Versicherung", customLabel: "" },
-  { id: 2, name: "Kfz-Steuer", amount: 180, frequency: "yearly", months: [6], category: "Steuer", customLabel: "" },
-  { id: 3, name: "GEZ Rundfunkbeitrag", amount: 55.08, frequency: "quarterly", months: [], category: "Sonstiges", customLabel: "GEZ" },
-];
+function getCat(key) { return CATEGORIES.find(c => c.key === key) || CATEGORIES[4]; }
 
 function getOccurrences(cost) {
   if (cost.frequency === "monthly")    return Array.from({length:12},(_,i)=>i);
@@ -43,12 +102,12 @@ function generateICS(costs, year) {
   const lines = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Fixkosten-Planer//DE","CALSCALE:GREGORIAN","METHOD:PUBLISH"];
   costs.forEach(cost => {
     const occ = getOccurrences(cost);
-    const displayName = cost.category === "Sonstiges" && cost.customLabel ? cost.customLabel : cost.name;
+    const displayName = cost.category==="Sonstiges"&&cost.customLabel ? cost.customLabel : cost.name;
     const cat = getCat(cost.category);
     occ.forEach(monthIdx => {
       const dateStr = toICSDate(year, monthIdx, 1);
       const uid = `fixkosten-${cost.id}-${monthIdx}-${year}@planer`;
-      const amount = cost.amount % 1 === 0 ? cost.amount : cost.amount.toFixed(2);
+      const amount = cost.amount%1===0 ? cost.amount : cost.amount.toFixed(2);
       lines.push("BEGIN:VEVENT",`UID:${uid}`,`DTSTART;VALUE=DATE:${dateStr}`,`DTEND;VALUE=DATE:${dateStr}`,
         `SUMMARY:${cat.emoji} ${displayName} – €${amount} fällig`,
         `DESCRIPTION:Fixkosten: ${displayName}\\nBetrag: €${amount}`,
@@ -75,12 +134,23 @@ export default function App() {
   const today = new Date();
   const currentMonth = today.getMonth();
   const currentYear  = today.getFullYear();
-  const [costs, setCosts] = useState(DEFAULT_COSTS);
-  const [view, setView] = useState("overview");
-  const [form, setForm] = useState({ name:"", amount:"", frequency:"yearly", months:[0], category:"Versicherung", customLabel:"" });
-  const [editId, setEditId] = useState(null);
+
+  const [costs, setCosts]       = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [saving, setSaving]     = useState(false);
+  const [error, setError]       = useState(null);
+  const [view, setView]         = useState("overview");
+  const [form, setForm]         = useState({ name:"", amount:"", frequency:"yearly", months:[0], category:"Versicherung", customLabel:"" });
+  const [editId, setEditId]     = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [exported, setExported] = useState(false);
+
+  useEffect(() => {
+    loadCosts()
+      .then(rows => setCosts(rows.map(dbToLocal)))
+      .catch(e => setError("Verbindung fehlgeschlagen: " + e.message))
+      .finally(() => setLoading(false));
+  }, []);
 
   const monthlyBreakdown = useMemo(() => {
     const bd = Array.from({length:12}, ()=>[]);
@@ -90,12 +160,12 @@ export default function App() {
 
   const monthlyTotals = monthlyBreakdown.map(items => items.reduce((s,c)=>s+c.amount,0));
   const totalAnnual = useMemo(() => costs.reduce((sum,c) => {
-    if (c.frequency==="monthly") return sum+c.amount*12;
-    if (c.frequency==="quarterly") return sum+c.amount*4;
+    if (c.frequency==="monthly")    return sum+c.amount*12;
+    if (c.frequency==="quarterly")  return sum+c.amount*4;
     if (c.frequency==="halfyearly") return sum+c.amount*2;
     return sum+c.amount;
   }, 0), [costs]);
-  const monthlyBuffer = totalAnnual / 12;
+  const monthlyBuffer = totalAnnual/12;
 
   const upcoming = useMemo(() => {
     const result = [];
@@ -106,27 +176,68 @@ export default function App() {
     return result.sort((a,b)=>a.monthsAway-b.monthsAway);
   }, [monthlyBreakdown, currentMonth]);
 
-  function toggleMonth(m) { setForm(f=>({...f, months: f.months.includes(m)?f.months.filter(x=>x!==m):[...f.months,m]})); }
+  function toggleMonth(m) { setForm(f=>({...f, months:f.months.includes(m)?f.months.filter(x=>x!==m):[...f.months,m]})); }
 
-  function handleSave() {
-    if (!form.name || !form.amount) return;
-    const entry = { id:editId||Date.now(), name:form.name, amount:parseFloat(form.amount), frequency:form.frequency, months:(form.frequency==="yearly"||form.frequency==="halfyearly")?form.months:[], category:form.category, customLabel:form.category==="Sonstiges"?form.customLabel:"" };
-    if (editId) { setCosts(c=>c.map(x=>x.id===editId?entry:x)); setEditId(null); }
-    else { setCosts(c=>[...c,entry]); }
-    setForm({name:"",amount:"",frequency:"yearly",months:[0],category:"Versicherung",customLabel:""});
-    setView("overview");
+  async function handleSave() {
+    if (!form.name||!form.amount) return;
+    setSaving(true);
+    setError(null);
+    const entry = {
+      name: form.name, amount: parseFloat(form.amount), frequency: form.frequency,
+      months: (form.frequency==="yearly"||form.frequency==="halfyearly")?form.months:[],
+      category: form.category, customLabel: form.category==="Sonstiges"?form.customLabel:"",
+    };
+    try {
+      if (editId) {
+        await updateCost(editId, entry);
+        setCosts(c=>c.map(x=>x.id===editId?{...entry,id:editId}:x));
+        setEditId(null);
+      } else {
+        const saved = await insertCost(entry);
+        setCosts(c=>[...c, dbToLocal(saved)]);
+      }
+      setForm({name:"",amount:"",frequency:"yearly",months:[0],category:"Versicherung",customLabel:""});
+      setView("overview");
+    } catch(e) {
+      setError("Speichern fehlgeschlagen: "+e.message);
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function handleEdit(cost) { setForm({name:cost.name,amount:String(cost.amount),frequency:cost.frequency,months:cost.months||[],category:cost.category,customLabel:cost.customLabel||""}); setEditId(cost.id); setView("add"); }
-  function handleDelete(id) { setCosts(c=>c.filter(x=>x.id!==id)); }
+  function handleEdit(cost) {
+    setForm({name:cost.name,amount:String(cost.amount),frequency:cost.frequency,months:cost.months||[],category:cost.category,customLabel:cost.customLabel||""});
+    setEditId(cost.id);
+    setView("add");
+  }
+
+  async function handleDelete(id) {
+    try {
+      await deleteCost(id);
+      setCosts(c=>c.filter(x=>x.id!==id));
+    } catch(e) {
+      setError("Löschen fehlgeschlagen");
+    }
+  }
+
   function handleExport() { downloadICS(costs, currentYear); setExported(true); setTimeout(()=>setExported(false),3000); }
 
   const maxMonthly = Math.max(...monthlyTotals, 1);
-  const freqLabel = f => FREQ_OPTIONS.find(x=>x.value===f)?.label||f;
-  const fmt = n => n%1===0?n:n.toFixed(2);
+  const freqLabel  = f => FREQ_OPTIONS.find(x=>x.value===f)?.label||f;
+  const fmt        = n => n%1===0?n:n.toFixed(2);
+
+  if (loading) return (
+    <div style={{minHeight:"100vh",background:"#f3f4f6",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+      <div style={{width:44,height:44,borderRadius:"50%",border:"4px solid #ede9fe",borderTopColor:"#7c3aed",animation:"spin 0.8s linear infinite"}}/>
+      <div style={{fontSize:14,color:"#9ca3af"}}>Lade Daten…</div>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
 
   return (
     <div style={{minHeight:"100vh",background:"#f3f4f6",color:"#111827",fontFamily:"'Inter','Segoe UI',sans-serif"}}>
+
+      {/* HEADER */}
       <div style={{background:"#fff",borderBottom:"1.5px solid #e5e7eb",padding:"0 16px"}}>
         <div style={{maxWidth:480,margin:"0 auto"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 0 14px"}}>
@@ -148,6 +259,17 @@ export default function App() {
       </div>
 
       <div style={{maxWidth:480,margin:"0 auto",padding:"20px 14px 60px"}}>
+
+        {/* Error banner */}
+        {error && (
+          <div style={{background:"#fef2f2",border:"1.5px solid #fecaca",borderRadius:10,padding:"12px 14px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:18}}>⚠️</span>
+            <div style={{flex:1,fontSize:13,color:"#dc2626"}}>{error}</div>
+            <button onClick={()=>setError(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,color:"#9ca3af"}}>✕</button>
+          </div>
+        )}
+
+        {/* OVERVIEW */}
         {view==="overview" && (
           <div>
             {upcoming.length>0 && (
@@ -165,20 +287,23 @@ export default function App() {
                 })}
               </div>
             )}
+
             <div style={{background:"#fff",border:"1.5px solid #e5e7eb",borderRadius:14,padding:"16px",marginBottom:20,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
               <div><div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>Gesamt / Jahr</div><div style={{fontSize:26,fontWeight:800,color:"#7c3aed",letterSpacing:"-0.5px"}}>€{fmt(totalAnnual)}</div></div>
               <div><div style={{fontSize:11,color:"#9ca3af",marginBottom:4}}>Monatlich zurücklegen</div><div style={{fontSize:26,fontWeight:800,color:"#059669",letterSpacing:"-0.5px"}}>€{monthlyBuffer.toFixed(2)}</div></div>
             </div>
+
             <div style={{background:exported?"#f0fdf4":"linear-gradient(135deg,#ede9fe,#fce7f3)",border:`1.5px solid ${exported?"#bbf7d0":"#c4b5fd"}`,borderRadius:13,padding:"14px 16px",marginBottom:20,display:"flex",alignItems:"center",gap:12}}>
               <div style={{fontSize:28}}>{exported?"✅":"📅"}</div>
               <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:13,color:exported?"#059669":"#7c3aed",marginBottom:2}}>{exported?"Datei heruntergeladen!":"In Kalender importieren"}</div>
-                <div style={{fontSize:12,color:exported?"#065f46":"#6b7280",lineHeight:1.4}}>{exported?"Öffne die .ics Datei → wird in Kalender importiert. Erinnerungen 14 & 3 Tage vorher.":"Exportiere alle Zahlungen. Du bekommst Erinnerungen 14 & 3 Tage vor jeder Zahlung."}</div>
+                <div style={{fontWeight:700,fontSize:13,color:exported?"#059669":"#7c3aed",marginBottom:2}}>{exported?"Heruntergeladen!":"In Kalender importieren"}</div>
+                <div style={{fontSize:12,color:exported?"#065f46":"#6b7280",lineHeight:1.4}}>{exported?"Öffne die .ics Datei → Erinnerungen 14 & 3 Tage vorher.":"Exportiere alle Zahlungen. Erinnerungen 14 & 3 Tage vorher."}</div>
               </div>
               {!exported&&<button onClick={handleExport} style={{background:"linear-gradient(135deg,#7c3aed,#a855f7)",border:"none",borderRadius:10,padding:"10px 14px",color:"#fff",fontWeight:700,fontSize:12,cursor:"pointer",flexShrink:0}}>⬇️ Export</button>}
             </div>
+
             <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",letterSpacing:2,textTransform:"uppercase",marginBottom:10}}>Alle Einträge</div>
-            {costs.length===0&&<div style={{textAlign:"center",color:"#d1d5db",padding:"40px 0",fontSize:14}}>Noch keine Kosten.<br/>Tippe auf "+ Neu".</div>}
+            {costs.length===0&&<div style={{textAlign:"center",color:"#d1d5db",padding:"40px 0",fontSize:14}}>Noch keine Kosten.<br/>Tippe auf "+ Neu" um zu starten.</div>}
             {costs.map(cost=>{
               const cat=getCat(cost.category);
               const name=cost.category==="Sonstiges"&&cost.customLabel?cost.customLabel:cost.name;
@@ -196,6 +321,7 @@ export default function App() {
           </div>
         )}
 
+        {/* CALENDAR */}
         {view==="calendar" && (
           <div>
             <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",letterSpacing:2,textTransform:"uppercase",marginBottom:14}}>Jahresübersicht {currentYear}</div>
@@ -218,6 +344,7 @@ export default function App() {
           </div>
         )}
 
+        {/* ADD / EDIT */}
         {view==="add" && (
           <div>
             <div style={{fontSize:17,fontWeight:800,color:"#111827",marginBottom:20}}>{editId?"Eintrag bearbeiten":"Neue Fixkosten"}</div>
@@ -245,8 +372,10 @@ export default function App() {
             </div>
             {form.category==="Sonstiges"&&(<div style={{marginBottom:20}}><label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>Was ist es genau? <span style={{color:"#9ca3af",fontWeight:400}}>(Freitext)</span></label><input value={form.customLabel} onChange={e=>setForm(f=>({...f,customLabel:e.target.value}))} placeholder="z.B. Domain, Mitgliedschaft, Abo …" style={{...INPUT,borderColor:"#f9a8d4",background:"#fff0f7"}}/></div>)}
             <div style={{display:"flex",gap:10}}>
-              <button onClick={()=>{setView("overview");setEditId(null);setForm({name:"",amount:"",frequency:"yearly",months:[0],category:"Versicherung",customLabel:""}); }} style={{flex:1,padding:"13px",borderRadius:12,background:"#fff",border:"1.5px solid #e5e7eb",color:"#6b7280",fontWeight:600,fontSize:14,cursor:"pointer"}}>Abbrechen</button>
-              <button onClick={handleSave} style={{flex:2,padding:"13px",borderRadius:12,background:"linear-gradient(135deg,#7c3aed,#a855f7)",border:"none",color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer",opacity:(!form.name||!form.amount)?0.5:1}}>{editId?"Speichern":"Hinzufügen ✓"}</button>
+              <button onClick={()=>{setView("overview");setEditId(null);setForm({name:"",amount:"",frequency:"yearly",months:[0],category:"Versicherung",customLabel:""});}} style={{flex:1,padding:"13px",borderRadius:12,background:"#fff",border:"1.5px solid #e5e7eb",color:"#6b7280",fontWeight:600,fontSize:14,cursor:"pointer"}}>Abbrechen</button>
+              <button onClick={handleSave} disabled={saving||!form.name||!form.amount} style={{flex:2,padding:"13px",borderRadius:12,background:"linear-gradient(135deg,#7c3aed,#a855f7)",border:"none",color:"#fff",fontWeight:800,fontSize:14,cursor:"pointer",opacity:(saving||!form.name||!form.amount)?0.5:1}}>
+                {saving?"Speichert…":editId?"Speichern":"Hinzufügen ✓"}
+              </button>
             </div>
           </div>
         )}
